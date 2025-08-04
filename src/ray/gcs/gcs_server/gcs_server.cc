@@ -112,6 +112,10 @@ GcsServer::GcsServer(const ray::gcs::GcsServerConfig &config,
                   });
             });
       }),
+      event_aggregator_client_(std::make_unique<rpc::EventAggregatorClientImpl>(
+          config_.metrics_agent_port, client_call_manager_)),
+      ray_event_recorder_(std::make_unique<observability::RayEventRecorder>(
+          *event_aggregator_client_, io_context_provider_.GetDefaultIOContext())),
       pubsub_periodical_runner_(
           PeriodicalRunner::Create(io_context_provider_.GetIOContext<GcsPublisher>())),
       periodical_runner_(
@@ -445,7 +449,8 @@ void GcsServer::InitGcsJobManager(const GcsInitData &gcs_init_data) {
                                       *function_manager_,
                                       kv_manager_->GetInstance(),
                                       io_context_provider_.GetDefaultIOContext(),
-                                      worker_client_pool_);
+                                      worker_client_pool_,
+                                      *ray_event_recorder_);
   gcs_job_manager_->Initialize(gcs_init_data);
 
   rpc_server_.RegisterService(std::make_unique<rpc::JobInfoGrpcService>(
