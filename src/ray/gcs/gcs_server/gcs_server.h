@@ -40,7 +40,6 @@
 #include "ray/raylet/scheduling/cluster_resource_scheduler.h"
 #include "ray/raylet/scheduling/cluster_task_manager.h"
 #include "ray/rpc/client_call.h"
-#include "ray/rpc/event_aggregator_client.h"
 #include "ray/rpc/gcs/gcs_rpc_server.h"
 #include "ray/rpc/metrics_agent_client.h"
 #include "ray/rpc/node_manager/raylet_client_pool.h"
@@ -268,10 +267,6 @@ class GcsServer {
   std::unique_ptr<GcsInternalKVManager> kv_manager_;
   /// Job info handler.
   std::unique_ptr<GcsJobManager> gcs_job_manager_;
-  // The Ray event aggregator client that is used to export events to the event
-  // aggregator. This is shared by various GCS managers (job, actor, node, etc.)
-  // This is a unique_ptr because the GcsServer outlives all of the GCS managers.
-  std::unique_ptr<rpc::EventAggregatorClient> event_aggregator_client_;
   /// The Ray job event recorder that is used to record job events.
   std::unique_ptr<observability::RayEventRecorder> ray_event_recorder_;
 

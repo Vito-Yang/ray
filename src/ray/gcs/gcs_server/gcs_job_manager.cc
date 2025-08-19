@@ -22,8 +22,12 @@
 #include <vector>
 
 #include "absl/strings/match.h"
+#include "ray/common/ray_config.h"
 #include "ray/gcs/pb_util.h"
 #include "ray/gcs/pubsub/gcs_pub_sub.h"
+#include "ray/observability/ray_driver_job_definition_event.h"
+#include "ray/observability/ray_driver_job_execution_event.h"
+#include "ray/observability/ray_event_interface.h"
 #include "ray/stats/metric.h"
 #include "ray/util/time.h"
 
@@ -57,11 +61,11 @@ void GcsJobManager::WriteDriverJobExportEvent(
     std::vector<std::unique_ptr<observability::RayEventInterface>> events;
     if (state == rpc::events::DriverJobExecutionEvent::CREATED) {
       // Job definition event is emitted once when the job is created.
-      events.push_back(
-          std::make_unique<observability::RayDriverJobDefinitionEvent>(job_data));
+      events.push_back(std::make_unique<observability::RayDriverJobDefinitionEvent>(
+          job_data, session_name_));
     }
-    events.push_back(
-        std::make_unique<observability::RayDriverJobExecutionEvent>(job_data, state));
+    events.push_back(std::make_unique<observability::RayDriverJobExecutionEvent>(
+        job_data, state, session_name_));
     ray_event_recorder_.AddEvents(std::move(events));
     return;
   }
@@ -172,7 +176,6 @@ void GcsJobManager::MarkJobAsFinished(rpc::JobTableData job_table_data,
       RAY_LOG(DEBUG).WithField(job_id) << "Marked job as finished.";
     }
     function_manager_.RemoveJobReference(job_id);
-
     WriteDriverJobExportEvent(job_table_data,
                               rpc::events::DriverJobExecutionEvent::SUCCESS);
 
