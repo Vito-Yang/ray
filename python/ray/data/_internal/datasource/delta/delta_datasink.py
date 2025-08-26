@@ -1,6 +1,5 @@
 """
 Main Delta Lake datasink implementation.
-
 This module contains the DeltaDatasink class which serves as the primary
 entry point for Delta Lake write operations in Ray Data.
 """
@@ -15,44 +14,31 @@ from typing import (
 
 import pyarrow as pa
 import pyarrow.fs as pa_fs
-
-from deltalake.transaction import AddAction as DeltaAddAction
-
-
 from ray.data._internal.datasource.delta.config import (
     DeltaSinkWriteResult,
     DeltaWriteConfig,
-    WriteMode,
 )
-from ray.data._internal.datasource.delta.merger import DeltaTableMerger
-from ray.data._internal.datasource.delta.optimizer import DeltaTableOptimizer
 from ray.data._internal.datasource.delta.utilities import (
-    AWSUtilities,
-    AzureUtilities,
-    DeltaUtilities,
-    GCPUtilities,
+    get_storage_options_for_path,
     try_get_deltatable,
 )
-
 from ray.data._internal.execution.interfaces import TaskContext
+from ray.data._internal.savemode import SaveMode
 from ray.data._internal.util import _check_import
 from ray.data.block import Block, BlockAccessor
-from ray.data.datasource.file_datasink import _FileDatasink
+from ray.data.datasource.datasink import Datasink
 
 logger = logging.getLogger(__name__)
 
 
-class DeltaDatasink(_FileDatasink):
+class DeltaDatasink(Datasink):
     """
     A Ray Data datasink for Delta Lake tables.
-
     This datasink provides comprehensive Delta Lake functionality including:
     - Standard write modes (append, overwrite, error, ignore)
-    - Advanced merge operations with DeltaMergeBuilder syntax
-    - SCD (Slowly Changing Dimensions) Types 1, 2, and 3
-    - Scalable microbatch processing
+    - Partitioned writes
+    - Schema validation
     - Multi-cloud support with automatic credential detection
-    - Table optimization (compaction, Z-ordering, vacuum)
 
     Supported Storage Systems:
     - Local filesystem: /path/to/table or file:///path/to/table
@@ -67,94 +53,67 @@ class DeltaDatasink(_FileDatasink):
         self,
         path: str,
         *,
-        mode: str = WriteMode.APPEND.value,
+        mode: str = SaveMode.APPEND.value,
         partition_cols: Optional[List[str]] = None,
         filesystem: Optional[pa_fs.FileSystem] = None,
         schema: Optional[pa.Schema] = None,
+        try_create_dir: bool = True,
+        config: Optional[DeltaWriteConfig] = None,
         **write_kwargs,
     ):
-        """
-        Initialize the Delta Lake datasink.
+        """Initialize the Delta Lake datasink.
 
         Args:
             path: Path to the Delta table
-            mode: Write mode (append, overwrite, error, ignore, merge)
+            mode: Write mode (append, overwrite, error, ignore)
             partition_cols: Columns to partition by
             filesystem: PyArrow filesystem to use
             schema: Table schema
+            try_create_dir: Whether to create directories if they don't exist
+            config: DeltaWriteConfig object with Delta-specific settings
             **write_kwargs: Additional write configuration options
         """
         self.path = path
-        self.mode = WriteMode(mode)
-        self.partition_cols = partition_cols or []
-        self.schema = schema
+        self.try_create_dir = try_create_dir
         self.write_kwargs = write_kwargs
 
-        # Initialize Delta utilities
-        self.delta_utils = DeltaUtilities(
-            path, storage_options=write_kwargs.get("storage_options")
-        )
+        # Use config if provided, otherwise build from individual parameters
+        if config is not None:
+            self.delta_write_config = config
+            self.mode = SaveMode(config.mode)
+            self.partition_cols = config.partition_cols or []
+            self.schema = config.schema
+            self.storage_options = config.storage_options or {}
+        else:
+            self.mode = SaveMode(mode)
+            self.partition_cols = partition_cols or []
+            self.schema = schema
+            self.storage_options = write_kwargs.get("storage_options", {})
 
-        # Cloud provider utilities
-        self.aws_utils = AWSUtilities()
-        self.gcp_utils = GCPUtilities()
-        self.azure_utils = AzureUtilities()
-
-        # Validate path
-        self.delta_utils.validate_path(path)
-
-        # Extract specific configuration objects
-        self.merge_config = write_kwargs.pop("merge_config", None)
-        self.optimization_config = write_kwargs.pop("optimization_config", None)
-
-        # Delta-specific configurations
-        self.delta_write_config = DeltaWriteConfig(
-            mode=self.mode,
-            partition_cols=partition_cols,
-            schema=schema,
-            merge_config=self.merge_config,
-            optimization_config=self.optimization_config,
-            **write_kwargs,
-        )
+            # Delta-specific configurations
+            self.delta_write_config = DeltaWriteConfig(
+                mode=self.mode,
+                partition_cols=partition_cols,
+                schema=schema,
+                **write_kwargs,
+            )
 
         # Set up filesystem
         if filesystem is not None:
             self.filesystem = filesystem
 
-        # Detect cloud provider from path scheme
-        path_lower = self.path.lower()
-        self.is_aws = path_lower.startswith(("s3://", "s3a://"))
-        self.is_gcp = path_lower.startswith(("gs://", "gcs://"))
-        self.is_azure = path_lower.startswith(("abfss://", "abfs://", "adl://"))
-        self.storage_options = self._get_storage_options()
-
-        super().__init__(path, filesystem=filesystem, **write_kwargs)
-
-    def _get_storage_options(self) -> Dict[str, str]:
-        """
-        Get storage options based on the path and detected cloud provider.
-
-        Returns:
-            Dict with storage options
-        """
-        storage_options = self.write_kwargs.get("storage_options", {})
-
-        if self.is_aws:
-            aws_options = self.aws_utils.get_s3_storage_options(self.path)
-            storage_options.update(aws_options)
-        elif self.is_azure:
-            azure_options = self.azure_utils.get_azure_storage_options(self.path)
-            storage_options.update(azure_options)
-
-        return storage_options
+        # Get storage options for the path if not provided
+        if not self.storage_options:
+            self.storage_options = get_storage_options_for_path(path)
 
     def write(
         self,
         blocks: Iterable[Block],
         ctx: TaskContext,
     ) -> DeltaSinkWriteResult:
-        """
-        Write blocks to the Delta table.
+        """Write blocks to the Delta table.
+
+        This method directly creates the Delta Lake table and transaction log.
 
         Args:
             blocks: Iterable of blocks to write
@@ -165,40 +124,78 @@ class DeltaDatasink(_FileDatasink):
         """
         _check_import(self, module="deltalake", package="deltalake")
 
+        logger.info(f"WRITE METHOD CALLED for task {ctx.task_idx} at {self.path}")
+        logger.info(f"Mode: {self.mode}, Mode value: {self.mode.value}")
+
         # Convert blocks to PyArrow tables and combine
         tables = []
+        total_rows = 0
+
         for block in blocks:
-            if BlockAccessor.for_block(block).num_rows() > 0:
-                table = BlockAccessor.for_block(block).to_arrow()
+            block_accessor = BlockAccessor.for_block(block)
+            num_rows = block_accessor.num_rows()
+            if num_rows > 0:
+                table = block_accessor.to_arrow()
                 tables.append(table)
+                total_rows += num_rows
+                logger.info(f"Block has {num_rows} rows, total so far: {total_rows}")
 
         if not tables:
-            # No data to write
-            return DeltaSinkWriteResult(actions=[], schema=self.schema)
+            logger.info("No data to write")
+            return DeltaSinkWriteResult(
+                path=self.path,
+                files_written=0,
+                bytes_written=0,
+                partitions_written=None,
+                metadata={"task_idx": ctx.task_idx, "num_rows": 0},
+            )
 
         # Combine all tables
         combined_table = pa.concat_tables(tables)
+        logger.info(
+            f"Combined table has {combined_table.num_rows} rows and schema: {combined_table.schema}"
+        )
 
-        # Execute write based on mode
-        if self.mode == WriteMode.MERGE:
-            return self._execute_merge_write(combined_table)
-        else:
-            return self._execute_standard_write(combined_table)
+        # Create directory if needed
+        if self.try_create_dir:
+            import os
 
-    def _execute_standard_write(self, table: pa.Table) -> DeltaSinkWriteResult:
-        """Execute standard write operations (append, overwrite, etc.)."""
+            try:
+                # Use the filesystem if available, otherwise use os.makedirs
+                if hasattr(self, "filesystem") and self.filesystem is not None:
+                    # PyArrow filesystem
+                    self.filesystem.create_dir(self.path, recursive=True)
+                else:
+                    # Standard filesystem
+                    os.makedirs(self.path, exist_ok=True)
+                logger.info(f"Created directory (if needed): {self.path}")
+            except Exception as e:
+                logger.warning(f"Failed to create directory {self.path}: {e}")
+
+        # Handle IGNORE mode - check if table exists and skip if it does
+        if self.mode == SaveMode.IGNORE:
+            existing_table = try_get_deltatable(self.path, self.storage_options)
+            if existing_table is not None:
+                logger.info(f"Table already exists at {self.path}, ignoring write")
+                return DeltaSinkWriteResult(
+                    path=self.path,
+                    files_written=0,
+                    bytes_written=0,
+                    partitions_written=None,
+                    metadata={"task_idx": ctx.task_idx, "num_rows": 0, "ignored": True},
+                )
+
+        # Execute write using deltalake.write_deltalake
         try:
             from deltalake import write_deltalake
 
             # Prepare write arguments
             write_args = {
                 "table_or_uri": self.path,
-                "data": table,
+                "data": combined_table,
                 "mode": self.mode.value,
-                "partition_by": self.partition_cols,
+                "partition_by": self.partition_cols if self.partition_cols else None,
                 "storage_options": self.storage_options,
-                "schema_mode": self.delta_write_config.schema_mode,
-                "engine": self.delta_write_config.engine,
             }
 
             # Add optional parameters if specified
@@ -208,154 +205,117 @@ class DeltaDatasink(_FileDatasink):
                 write_args["description"] = self.delta_write_config.description
             if self.delta_write_config.configuration:
                 write_args["configuration"] = self.delta_write_config.configuration
-            if self.delta_write_config.storage_options:
-                write_args["storage_options"].update(
-                    self.delta_write_config.storage_options
-                )
+            if self.delta_write_config.schema_mode:
+                write_args["schema_mode"] = self.delta_write_config.schema_mode
+            if self.delta_write_config.target_file_size:
+                write_args[
+                    "target_file_size"
+                ] = self.delta_write_config.target_file_size
+            if self.delta_write_config.writer_properties:
+                write_args[
+                    "writer_properties"
+                ] = self.delta_write_config.writer_properties
 
-            # Execute write
+            logger.info(f"Executing deltalake.write_deltalake with args: {write_args}")
+
+            # Execute write - this creates the Delta table and transaction log
             write_deltalake(**write_args)
+
+            logger.info(f"Successfully wrote Delta table to {self.path}")
 
             # Get table info for result
             dt = try_get_deltatable(self.path, self.storage_options)
             if dt:
-                actions = self._get_add_actions_from_table(dt)
-                result = DeltaSinkWriteResult(actions=actions, schema=table.schema)
+                logger.info(
+                    f"Delta table created successfully with version {dt.version()}"
+                )
+
+                # Get file information from the table
+                actions = dt.get_add_actions(flatten=True)
+                if actions is not None:
+                    # Convert PyArrow RecordBatch to list of dictionaries
+                    try:
+                        # Try to convert to pandas first (more reliable)
+                        import pandas as pd
+
+                        actions_df = actions.to_pandas()
+                        actions_list = actions_df.to_dict("records")
+                    except (ImportError, AttributeError):
+                        # Fallback: convert to list of dictionaries manually
+                        actions_list = []
+                        # Use num_rows() method instead of len() for PyArrow RecordBatch
+                        num_rows = actions.num_rows
+                        for i in range(num_rows):
+                            action_dict = {}
+                            for j, col_name in enumerate(actions.column_names):
+                                action_dict[col_name] = actions.column(j)[i].as_py()
+                            actions_list.append(action_dict)
+
+                    files_written = len(actions_list)
+                    total_bytes = sum(
+                        action.get("size_bytes", 0) for action in actions_list
+                    )
+
+                    # Extract partition information
+                    partitions_written = None
+                    if self.partition_cols:
+                        partitions_written = []
+                        for action in actions_list:
+                            partition_values = action.get("partition_values", {})
+                            if partition_values:
+                                partition_path = "/".join(
+                                    [f"{k}={v}" for k, v in partition_values.items()]
+                                )
+                                if partition_path not in partitions_written:
+                                    partitions_written.append(partition_path)
+
+                    logger.info(f"Table has {files_written} files, {total_bytes} bytes")
+
+                    result = DeltaSinkWriteResult(
+                        path=self.path,
+                        files_written=files_written,
+                        bytes_written=total_bytes,
+                        partitions_written=partitions_written,
+                        metadata={
+                            "task_idx": ctx.task_idx,
+                            "num_rows": combined_table.num_rows,
+                            "version": dt.version(),
+                            "schema": str(combined_table.schema),
+                        },
+                    )
+                else:
+                    # Fallback if we can't get actions
+                    result = DeltaSinkWriteResult(
+                        path=self.path,
+                        files_written=1,  # Assume at least one file
+                        bytes_written=0,  # We don't know the exact size
+                        partitions_written=None,
+                        metadata={
+                            "task_idx": ctx.task_idx,
+                            "num_rows": combined_table.num_rows,
+                            "version": dt.version(),
+                            "schema": str(combined_table.schema),
+                        },
+                    )
             else:
-                result = DeltaSinkWriteResult(actions=[], schema=table.schema)
-
-            # Perform post-write optimization if configured
-            if self.optimization_config:
-                try:
-                    optimizer = DeltaTableOptimizer(
-                        self.path,
-                        storage_options=self.storage_options,
-                        config=self.optimization_config,
-                    )
-                    optimization_result = optimizer.optimize()
-                    logger.info(
-                        f"Post-write optimization completed: {optimization_result}"
-                    )
-
-                    # Add optimization metrics to write result if possible
-                    if hasattr(result, "optimization_metrics"):
-                        result.optimization_metrics = optimization_result
-                    elif isinstance(result, DeltaSinkWriteResult):
-                        result.optimization_metrics = optimization_result
-
-                except Exception as e:
-                    logger.warning(
-                        f"Post-write optimization failed but write operation succeeded. "
-                        f"This is not critical and your data has been written successfully. "
-                        f"Optimization error: {e}. "
-                        f"You can manually run optimization later using the standalone optimization functions. "
-                        "Example: ray.data._internal.datasource.delta.vacuum_delta_table()"
-                    )
+                logger.warning("Could not get Delta table info after write")
+                result = DeltaSinkWriteResult(
+                    path=self.path,
+                    files_written=1,  # Assume at least one file
+                    bytes_written=0,  # We don't know the exact size
+                    partitions_written=None,
+                    metadata={
+                        "task_idx": ctx.task_idx,
+                        "num_rows": combined_table.num_rows,
+                        "schema": str(combined_table.schema),
+                    },
+                )
 
             return result
 
         except Exception as e:
-            logger.error(f"Standard write operation failed: {e}")
+            logger.error(f"Delta Lake write operation failed: {e}")
             raise
-
-    def _execute_merge_write(self, table: pa.Table) -> DeltaSinkWriteResult:
-        """Execute merge write operations."""
-        if not self.merge_config:
-            raise ValueError("merge_config is required for merge operations")
-
-        try:
-            merger = DeltaTableMerger(self.path, storage_options=self.storage_options)
-            merge_result = merger.execute_merge(table, self.merge_config)
-
-            # Get updated table info
-            dt = try_get_deltatable(self.path, self.storage_options)
-            if dt:
-                actions = self._get_add_actions_from_table(dt)
-                result = DeltaSinkWriteResult(
-                    actions=actions, schema=table.schema, merge_metrics=merge_result
-                )
-            else:
-                result = DeltaSinkWriteResult(
-                    actions=[], schema=table.schema, merge_metrics=merge_result
-                )
-
-            # Perform post-merge optimization if configured
-            if self.optimization_config:
-                try:
-                    optimizer = DeltaTableOptimizer(
-                        self.path,
-                        storage_options=self.storage_options,
-                        config=self.optimization_config,
-                    )
-                    optimization_result = optimizer.optimize()
-
-                    # Add optimization metrics to write result
-                    if hasattr(result, "optimization_metrics"):
-                        result.optimization_metrics = optimization_result
-                    elif isinstance(result, DeltaSinkWriteResult):
-                        result.optimization_metrics = optimization_result
-
-                except Exception as e:
-                    logger.warning(
-                        f"Post-merge optimization failed but merge operation succeeded. "
-                        f"This is not critical and your data has been merged successfully. "
-                        f"Optimization error: {e}. "
-                        f"You can manually run optimization later using the standalone optimization functions. "
-                        "Example: ray.data._internal.datasource.delta.vacuum_delta_table()"
-                    )
-
-            return result
-
-        except Exception as e:
-            logger.error(f"Merge operation failed: {e}")
-            raise
-
-    def _get_add_actions_from_table(self, dt) -> List:
-        """Extract add actions from Delta table for result metadata."""
-        try:
-            actions = []
-
-            # Get the latest version's add actions
-            for action in dt.get_add_actions(flatten=True).to_pylist():
-                # Try to create DeltaAddAction with stats
-                try:
-                    delta_action = DeltaAddAction(
-                        path=str(action.path),
-                        size_bytes=int(action.size_bytes) if action.size_bytes else 0,
-                        partition_values=dict(action.partition_values)
-                        if action.partition_values
-                        else {},
-                        modification_time=int(action.modification_time)
-                        if action.modification_time
-                        else 0,
-                        data_change=bool(action.data_change)
-                        if hasattr(action, "data_change")
-                        else True,
-                        stats=str(action.stats) if action.stats else None,
-                    )
-                except TypeError:
-                    # If that fails, try without stats parameter
-                    delta_action = DeltaAddAction(
-                        path=str(action.path),
-                        size_bytes=int(action.size_bytes) if action.size_bytes else 0,
-                        partition_values=dict(action.partition_values)
-                        if action.partition_values
-                        else {},
-                        modification_time=int(action.modification_time)
-                        if action.modification_time
-                        else 0,
-                        data_change=bool(action.data_change)
-                        if hasattr(action, "data_change")
-                        else True,
-                    )
-
-                actions.append(delta_action)
-
-            return actions
-
-        except Exception as e:
-            logger.warning(f"Could not extract add actions: {e}")
-            return []
 
     @property
     def supports_distributed_writes(self) -> bool:

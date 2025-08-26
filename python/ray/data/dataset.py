@@ -43,9 +43,9 @@ from ray.data._internal.datasource.csv_datasink import CSVDatasink
 from ray.data._internal.datasource.delta import (
     DeltaDatasink,
     DeltaWriteConfig,
-    MergeConfig,
-    OptimizationConfig,
-    SCDConfig,
+    
+    
+    
 )
 from ray.data._internal.datasource.iceberg_datasink import IcebergDatasink
 from ray.data._internal.datasource.image_datasink import ImageDatasink
@@ -3511,46 +3511,17 @@ class Dataset:
             or ``scd_type`` is required.
         """
         # Build merge configuration from simplified parameters
-        merge_config = None
-        if mode == "merge":
-            if scd_type is not None:
-                if not key_columns:
-                    raise ValueError("key_columns required when using scd_type")
-                scd_config = SCDConfig(scd_type=scd_type, key_columns=key_columns)
-                merge_config = MergeConfig(scd_config=scd_config)
-            elif merge_predicate:
-                merge_config = MergeConfig(mode="upsert", predicate=merge_predicate)
-            else:
-                raise ValueError(
-                    "For merge mode, either merge_predicate or scd_type must be specified"
-                )
 
         # Extract optimization settings
         optimization_config = delta_kwargs.pop("optimization_config", None)
-        enable_optimization = delta_kwargs.pop("enable_optimization", False)
-        if enable_optimization and not optimization_config:
-            # Build default optimization config from individual options
-            from ray.data._internal.datasource.delta import OptimizationMode
-
-            opt_mode = OptimizationMode.COMPACT
-            z_order_columns = delta_kwargs.pop("z_order_columns", None)
-            if z_order_columns:
-                opt_mode = OptimizationMode.Z_ORDER
-
-            optimization_config = OptimizationConfig(
-                mode=opt_mode,
-                z_order_columns=z_order_columns,
-                target_size_bytes=delta_kwargs.pop("compact_target_size", None),
-                retention_hours=delta_kwargs.pop("vacuum_retention_hours", None),
-            )
 
         # Build Delta write configuration
         config = DeltaWriteConfig(
             mode=mode,
             partition_cols=partition_cols,
             storage_options=storage_options,
-            merge_config=merge_config,
-            optimization_config=optimization_config,
+            
+            
             **delta_kwargs,
         )
 
