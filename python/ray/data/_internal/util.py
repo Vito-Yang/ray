@@ -1547,7 +1547,9 @@ def parse_size_string(size_str: str) -> int:
     }
 
     if unit not in multipliers:
-        raise ValueError(f"Unsupported unit: '{unit}'. Supported units: {list(multipliers.keys())}")
+        raise ValueError(
+            f"Unsupported unit: '{unit}'. Supported units: {list(multipliers.keys())}"
+        )
 
     return int(number * multipliers[unit])
 

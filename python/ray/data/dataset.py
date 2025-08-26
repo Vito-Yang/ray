@@ -1585,7 +1585,9 @@ class Dataset:
         # Handle target_num_bytes_per_block parameter
         if target_num_bytes_per_block is not None:
             if isinstance(target_num_bytes_per_block, str):
-                target_num_bytes_per_block = parse_size_string(target_num_bytes_per_block)
+                target_num_bytes_per_block = parse_size_string(
+                    target_num_bytes_per_block
+                )
 
             if keys is not None:
                 warnings.warn(
@@ -1615,11 +1617,13 @@ class Dataset:
                 )
 
         # Check that exactly one of the three parameters is set
-        param_count = sum([
-            num_blocks is not None,
-            target_num_rows_per_block is not None,
-            target_num_bytes_per_block is not None
-        ])
+        param_count = sum(
+            [
+                num_blocks is not None,
+                target_num_rows_per_block is not None,
+                target_num_bytes_per_block is not None,
+            ]
+        )
 
         if param_count == 0:
             raise ValueError(
@@ -5881,9 +5885,9 @@ class Dataset:
         import pyarrow as pa
 
         ref_bundles: Iterator[RefBundle] = self.iter_internal_ref_bundles()
-        block_refs: List[ObjectRef["pyarrow.Table"]] = (
-            _ref_bundles_iterator_to_block_refs_list(ref_bundles)
-        )
+        block_refs: List[
+            ObjectRef["pyarrow.Table"]
+        ] = _ref_bundles_iterator_to_block_refs_list(ref_bundles)
         # Schema is safe to call since we have already triggered execution with
         # iter_internal_ref_bundles.
         schema = self.schema(fetch_if_missing=True)
