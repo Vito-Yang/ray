@@ -133,12 +133,12 @@ class AutoscalingState:
 
         self._deployment_info = None
         self._config = None
-        self._policy = None
         self._running_replicas: List[ReplicaID] = []
         self._target_capacity: Optional[float] = None
         self._target_capacity_direction: Optional[TargetCapacityDirection] = None
         self._last_scale_up_time: Optional[float] = None
         self._last_scale_down_time: Optional[float] = None
+        self.policy = None
 
     def register(self, info: DeploymentInfo, curr_target_num_replicas: int) -> int:
         """Registers an autoscaling deployment's info.
@@ -156,10 +156,10 @@ class AutoscalingState:
 
         self._deployment_info = info
         self._config = config
-        self._policy = self._config.get_policy()
         self._target_capacity = info.target_capacity
         self._target_capacity_direction = info.target_capacity_direction
         self._policy_state = {}
+        self.policy = self._config.get_policy()
 
         return self.apply_bounds(target_num_replicas)
 
@@ -340,7 +340,7 @@ class AutoscalingState:
             total_num_requests=self.get_total_num_requests(),
             capacity_adjusted_min_replicas=self.get_num_replicas_lower_bound(),
             capacity_adjusted_max_replicas=self.get_num_replicas_upper_bound(),
-            policy_state=self._policy_state.copy(),
+            policy_state=None,
             current_time=time.time(),
             config=self._config,
             queued_requests=total_queued_requests,
@@ -351,7 +351,10 @@ class AutoscalingState:
             last_scale_down_time=self._last_scale_down_time,
         )
 
-        decision_num_replicas, self._policy_state = self._policy(autoscaling_context)
+        if self._policy_state is not None:
+            autoscaling_context.policy_state = self._policy_state.copy()
+
+        decision_num_replicas, self._policy_state = self.policy(autoscaling_context)
 
         if _skip_bound_check:
             return decision_num_replicas
