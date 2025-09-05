@@ -317,18 +317,19 @@ class AutoscalingState:
         `_skip_bound_check` is True, then the bounds are not applied.
         """
 
-        requests_per_replica = {}
-        for replica_id in self._running_replicas:
-            if replica_id in self._replica_requests:
-                requests_per_replica[replica_id] = self._replica_requests[
-                    replica_id
-                ].running_requests
-            else:
-                requests_per_replica[replica_id] = 0.0
+        requests_per_replica = {
+            replica_id: (
+                self._replica_requests[replica_id].running_requests
+                if replica_id in self._replica_requests
+                else 0.0
+            )
+            for replica_id in self._running_replicas
+        }
 
-        total_queued_requests = 0
-        for handle_metric in self._handle_requests.values():
-            total_queued_requests += handle_metric.queued_requests
+        total_queued_requests = sum(
+            handle_metric.queued_requests
+            for handle_metric in self._handle_requests.values()
+        )
 
         autoscaling_context: AutoscalingContext = AutoscalingContext(
             deployment_id=self._deployment_id,
