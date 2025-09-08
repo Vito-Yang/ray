@@ -49,23 +49,25 @@ class CacheableOperation(Enum):
 
 class TransformationType(Enum):
     """Categories of transformations and their cache effects."""
-
-    ROW_PRESERVING_NO_SCHEMA_CHANGE = "row_preserving_no_schema_change"
-    ROW_PRESERVING_SCHEMA_CHANGE = "row_preserving_schema_change"
-    ROW_CHANGING_NO_SCHEMA_CHANGE = "row_changing_no_schema_change"
-    ROW_CHANGING_SCHEMA_CHANGE = "row_changing_schema_change"
-    REORDERING_ONLY = "reordering_only"
-    COMBINING = "combining"
-    GROUPING = "grouping"
+    
+    SCHEMA_PRESERVING_COUNT_CHANGING = "schema_preserving_count_changing"  # limit, repartition
+    ROW_PRESERVING_SCHEMA_CHANGE = "row_preserving_schema_change"  # map, add_column, etc.
+    ROW_CHANGING_NO_SCHEMA_CHANGE = "row_changing_no_schema_change"  # filter
+    ROW_CHANGING_SCHEMA_CHANGE = "row_changing_schema_change"  # map_batches, flat_map
+    REORDERING_ONLY = "reordering_only"  # sort, random_shuffle
+    COMBINING = "combining"  # union, join
+    GROUPING = "grouping"  # groupby
 
 
 # Smart invalidation matrix
 CACHE_VALIDITY_MATRIX = {
-    TransformationType.ROW_PRESERVING_NO_SCHEMA_CHANGE: {
-        CacheableOperation.COUNT,
+    TransformationType.SCHEMA_PRESERVING_COUNT_CHANGING: {
+        # limit, repartition - preserve schema/columns but NOT count (limit changes count!)
         CacheableOperation.SCHEMA,
         CacheableOperation.COLUMNS,
-        CacheableOperation.SIZE_BYTES,
+        # COUNT is invalidated because limit() changes the row count
+        # SIZE_BYTES is invalidated because limit() changes dataset size
+        # TAKE_ALL, MATERIALIZE invalidated because data subset changes
     },
     TransformationType.ROW_PRESERVING_SCHEMA_CHANGE: {
         CacheableOperation.COUNT,
@@ -102,8 +104,8 @@ def get_transformation_type(operation_name: str) -> TransformationType:
         The transformation type for determining cache invalidation behavior.
     """
     operation_map = {
-        "limit": TransformationType.ROW_PRESERVING_NO_SCHEMA_CHANGE,
-        "repartition": TransformationType.ROW_PRESERVING_NO_SCHEMA_CHANGE,
+        "limit": TransformationType.SCHEMA_PRESERVING_COUNT_CHANGING,
+        "repartition": TransformationType.SCHEMA_PRESERVING_COUNT_CHANGING,
         "map": TransformationType.ROW_PRESERVING_SCHEMA_CHANGE,
         "add_column": TransformationType.ROW_PRESERVING_SCHEMA_CHANGE,
         "drop_columns": TransformationType.ROW_PRESERVING_SCHEMA_CHANGE,
