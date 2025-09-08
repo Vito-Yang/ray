@@ -544,16 +544,7 @@ class DataContext:
     # Dataset caching configuration
     enable_dataset_caching: bool = True
     dataset_cache_max_size_bytes: int = 1024 * 1024 * 1024  # 1GB default
-
-    # Block-level caching configuration
-    enable_block_caching: bool = True
-    block_cache_max_size_bytes: int = 2 * 1024 * 1024 * 1024  # 2GB default
-
-    # Disk caching configuration
-    enable_disk_caching: bool = True
-    max_disk_cache_bytes: int = 10 * 1024 * 1024 * 1024  # 10GB default
     cache_location: Optional[str] = None  # None = use default temp location
-    disk_cache_compression_enabled: bool = True
     memory_spill_threshold_bytes: int = (
         100 * 1024 * 1024
     )  # 100MB threshold for spilling to disk

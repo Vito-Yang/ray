@@ -5,20 +5,20 @@ smart invalidation, disk spilling, and performance optimizations. The system is
 designed to be powerful yet simple, focusing on Ray Data-specific optimizations.
 """
 
+import contextlib
 import functools
 import gzip
-import hashlib
+import inspect
 import logging
 import os
 import pickle
 import threading
 import time
-import weakref
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Set, Union
+from typing import Any, Callable, Dict, List, Optional, Union
 
 from ray.data._internal.logical.interfaces import LogicalPlan
 from ray.data.context import DataContext
@@ -402,11 +402,12 @@ class _DatasetCacheManager:
         # Disk spilling for large items
         context = DataContext.get_current()
         cache_location = getattr(context, "cache_location", None)
-        max_disk_size = getattr(context, "max_disk_cache_bytes", 10 * 1024**3)
         self._disk_spill_threshold = getattr(
             context, "memory_spill_threshold_bytes", 100 * 1024**2
         )
 
+        # Use reasonable default for disk cache size (10GB)
+        max_disk_size = 10 * 1024**3
         self._disk_cache = _DiskSpillManager(cache_location, max_disk_size)
 
     def get(self, key: _CacheKey) -> Optional[Any]:
@@ -517,12 +518,11 @@ class _DatasetCacheManager:
                 "hit_count": self._hit_count,
                 "miss_count": self._miss_count,
                 "hit_rate": hit_rate,
-                "memory_cache_size_bytes": self.current_size_bytes,
-                "memory_cache_entries": len(self._cache),
+                "cache_size_bytes": self.current_size_bytes,
+                "cache_entries": len(self._cache),
                 "disk_cache_size_bytes": self._disk_cache.current_size_bytes,
                 "disk_cache_entries": len(self._disk_cache._entries),
-                "max_memory_size_bytes": self.max_size_bytes,
-                "max_disk_size_bytes": self._disk_cache.max_size_bytes,
+                "max_size_bytes": self.max_size_bytes,
                 "disk_spill_threshold_bytes": self._disk_spill_threshold,
             }
 
@@ -622,7 +622,6 @@ def cache_result(operation_name: str, include_params: List[str] = None):
             # Create cache key
             cache_params = {}
             if include_params:
-                import inspect
 
                 sig = inspect.signature(func)
                 bound_args = sig.bind(self, *args, **kwargs)
@@ -744,5 +743,3 @@ def set_cache_size(max_size_bytes: int):
     return _CacheConfig(max_size_bytes=max_size_bytes)
 
 
-# Import fix for contextlib
-import contextlib
