@@ -741,5 +741,3 @@ def disable_dataset_caching():
 def set_cache_size(max_size_bytes: int):
     """Context manager to temporarily set cache size limit."""
     return _CacheConfig(max_size_bytes=max_size_bytes)
-
-
