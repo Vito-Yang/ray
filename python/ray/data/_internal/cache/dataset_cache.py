@@ -49,9 +49,13 @@ class CacheableOperation(Enum):
 
 class TransformationType(Enum):
     """Categories of transformations and their cache effects."""
-    
-    SCHEMA_PRESERVING_COUNT_CHANGING = "schema_preserving_count_changing"  # limit, repartition
-    ROW_PRESERVING_SCHEMA_CHANGE = "row_preserving_schema_change"  # map, add_column, etc.
+
+    SCHEMA_PRESERVING_COUNT_CHANGING = (
+        "schema_preserving_count_changing"  # limit, repartition
+    )
+    ROW_PRESERVING_SCHEMA_CHANGE = (
+        "row_preserving_schema_change"  # map, add_column, etc.
+    )
     ROW_CHANGING_NO_SCHEMA_CHANGE = "row_changing_no_schema_change"  # filter
     ROW_CHANGING_SCHEMA_CHANGE = "row_changing_schema_change"  # map_batches, flat_map
     REORDERING_ONLY = "reordering_only"  # sort, random_shuffle
