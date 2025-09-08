@@ -6,7 +6,7 @@ types and automatic disk spilling for large results.
 
 Key Features:
 - Automatic caching of expensive operations (count, schema, aggregations, materialize)
-- Smart cache invalidation based on transformation types  
+- Smart cache invalidation based on transformation types
 - Intelligent disk spilling with compression for large items
 - Thread-safe operations with LRU eviction
 - Zero API changes required
@@ -44,7 +44,7 @@ __all__ = [
     "cache_result",
     "invalidate_cache_on_transform",
     "clear_dataset_cache",
-    "get_cache_stats", 
+    "get_cache_stats",
     "disable_dataset_caching",
     "set_cache_size",
 ]

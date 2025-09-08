@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 class CacheableOperation(Enum):
     """Operations that can be cached."""
-    
+
     COUNT = "count"
     SCHEMA = "schema"
     SIZE_BYTES = "size_bytes"
@@ -49,7 +49,7 @@ class CacheableOperation(Enum):
 
 class TransformationType(Enum):
     """Categories of transformations and their cache effects."""
-    
+
     ROW_PRESERVING_NO_SCHEMA_CHANGE = "row_preserving_no_schema_change"
     ROW_PRESERVING_SCHEMA_CHANGE = "row_preserving_schema_change"
     ROW_CHANGING_NO_SCHEMA_CHANGE = "row_changing_no_schema_change"
@@ -94,10 +94,10 @@ CACHE_VALIDITY_MATRIX = {
 
 def get_transformation_type(operation_name: str) -> TransformationType:
     """Get transformation type for cache invalidation.
-    
+
     Args:
         operation_name: Name of the transformation operation (e.g., "map", "filter").
-        
+
     Returns:
         The transformation type for determining cache invalidation behavior.
     """
@@ -125,11 +125,11 @@ def get_transformation_type(operation_name: str) -> TransformationType:
 
 class _CacheKey:
     """Cache key based on dataset logical plan and operation parameters.
-    
+
     This class creates deterministic cache keys by hashing the logical plan
     structure and operation parameters. Cache keys are used to identify
     identical operations for caching purposes.
-    
+
     Args:
         logical_plan: The dataset's logical plan for cache key generation.
         operation_name: Name of the operation being cached.
@@ -177,10 +177,10 @@ class _CacheKey:
 
 class _CacheEntry:
     """Cached result with metadata.
-    
+
     Stores a cached operation result along with metadata for cache management
     including size estimation, access tracking, and LRU eviction.
-    
+
     Args:
         key: The cache key for this entry.
         result: The cached operation result.
@@ -204,21 +204,25 @@ class _CacheEntry:
 class _DiskSpillManager:
     """Manages disk spilling for large cache items."""
 
-    def __init__(self, cache_location: Optional[str] = None, max_size_bytes: int = 10 * 1024**3):
+    def __init__(
+        self, cache_location: Optional[str] = None, max_size_bytes: int = 10 * 1024**3
+    ):
         self.max_size_bytes = max_size_bytes
         self.current_size_bytes = 0
-        
+
         # Setup cache directory
         if cache_location is None:
             cache_location = os.path.join(os.path.expanduser("~"), ".ray_data_cache")
-        
+
         self.cache_dir = Path(cache_location)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
-        
+
         self._entries: OrderedDict[str, Dict] = OrderedDict()
         self._lock = threading.RLock()
-        self._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="disk_cache")
-        
+        self._executor = ThreadPoolExecutor(
+            max_workers=2, thread_name_prefix="disk_cache"
+        )
+
         self._load_existing_entries()
 
     def _load_existing_entries(self):
@@ -226,19 +230,19 @@ class _DiskSpillManager:
         try:
             metadata_file = self.cache_dir / "cache_metadata.pkl"
             if metadata_file.exists():
-                with open(metadata_file, 'rb') as f:
+                with open(metadata_file, "rb") as f:
                     saved_entries = pickle.load(f)
-                
+
                 for key, entry in saved_entries.items():
-                    file_path = Path(entry['file_path'])
+                    file_path = Path(entry["file_path"])
                     if file_path.exists():
                         self._entries[key] = entry
-                        self.current_size_bytes += entry['size_bytes']
+                        self.current_size_bytes += entry["size_bytes"]
                     else:
                         # Clean up missing files
                         with contextlib.suppress(FileNotFoundError):
                             file_path.unlink()
-                            
+
         except Exception as e:
             logger.debug(f"Could not load disk cache metadata: {e}")
 
@@ -248,27 +252,27 @@ class _DiskSpillManager:
             entry = self._entries.get(key)
             if entry is None:
                 return None
-            
-            file_path = Path(entry['file_path'])
+
+            file_path = Path(entry["file_path"])
             if not file_path.exists():
                 # Clean up missing entry
                 del self._entries[key]
                 return None
-            
+
             # Move to end (LRU)
             self._entries.move_to_end(key)
-            entry['last_accessed'] = time.time()
+            entry["last_accessed"] = time.time()
 
         # Load from disk
         try:
-            with open(file_path, 'rb') as f:
+            with open(file_path, "rb") as f:
                 data = f.read()
-            
-            if entry.get('compressed', False):
+
+            if entry.get("compressed", False):
                 data = gzip.decompress(data)
-            
+
             return pickle.loads(data)
-            
+
         except Exception as e:
             logger.warning(f"Failed to load disk cache entry {key}: {e}")
             # Clean up corrupted entry
@@ -288,48 +292,49 @@ class _DiskSpillManager:
             # Serialize and compress
             serialized = pickle.dumps(data)
             compressed = gzip.compress(serialized)
-            
+
             file_path = self.cache_dir / f"{key}.cache"
-            
+
             # Atomic write
-            temp_path = file_path.with_suffix('.tmp')
-            with open(temp_path, 'wb') as f:
+            temp_path = file_path.with_suffix(".tmp")
+            with open(temp_path, "wb") as f:
                 f.write(compressed)
                 f.flush()
                 os.fsync(f.fileno())
-            
+
             temp_path.replace(file_path)
-            
+
             # Update metadata
             with self._lock:
                 # Remove old entry if exists
                 if key in self._entries:
                     old_entry = self._entries[key]
-                    self.current_size_bytes -= old_entry['size_bytes']
-                
+                    self.current_size_bytes -= old_entry["size_bytes"]
+
                 # Add new entry
                 entry_data = {
-                    'file_path': str(file_path),
-                    'size_bytes': len(compressed),
-                    'compressed': True,
-                    'created_at': time.time(),
-                    'last_accessed': time.time(),
+                    "file_path": str(file_path),
+                    "size_bytes": len(compressed),
+                    "compressed": True,
+                    "created_at": time.time(),
+                    "last_accessed": time.time(),
                 }
-                
+
                 # Evict if necessary
                 while (
-                    self.current_size_bytes + entry_data['size_bytes'] > self.max_size_bytes
+                    self.current_size_bytes + entry_data["size_bytes"]
+                    > self.max_size_bytes
                     and self._entries
                 ):
                     self._evict_lru()
-                
+
                 self._entries[key] = entry_data
-                self.current_size_bytes += entry_data['size_bytes']
-                
+                self.current_size_bytes += entry_data["size_bytes"]
+
                 # Save metadata periodically
                 if len(self._entries) % 50 == 0:
                     self._save_metadata()
-                    
+
         except Exception as e:
             logger.warning(f"Failed to store disk cache entry {key}: {e}")
 
@@ -337,19 +342,19 @@ class _DiskSpillManager:
         """Evict least recently used entry."""
         if not self._entries:
             return
-        
+
         key, entry = self._entries.popitem(last=False)
-        self.current_size_bytes -= entry['size_bytes']
-        
+        self.current_size_bytes -= entry["size_bytes"]
+
         # Remove file
         with contextlib.suppress(FileNotFoundError):
-            Path(entry['file_path']).unlink()
+            Path(entry["file_path"]).unlink()
 
     def _save_metadata(self):
         """Save metadata to disk."""
         try:
             metadata_file = self.cache_dir / "cache_metadata.pkl"
-            with open(metadata_file, 'wb') as f:
+            with open(metadata_file, "wb") as f:
                 pickle.dump(dict(self._entries), f)
         except Exception as e:
             logger.debug(f"Failed to save disk cache metadata: {e}")
@@ -359,11 +364,11 @@ class _DiskSpillManager:
         with self._lock:
             for entry in self._entries.values():
                 with contextlib.suppress(FileNotFoundError):
-                    Path(entry['file_path']).unlink()
-            
+                    Path(entry["file_path"]).unlink()
+
             self._entries.clear()
             self.current_size_bytes = 0
-            
+
             # Remove metadata file
             with contextlib.suppress(FileNotFoundError):
                 (self.cache_dir / "cache_metadata.pkl").unlink()
@@ -371,11 +376,11 @@ class _DiskSpillManager:
 
 class _DatasetCacheManager:
     """Manages intelligent caching for Dataset operations.
-    
+
     Provides comprehensive caching with memory management, disk spilling,
     and smart invalidation based on transformation types. The cache manager
     handles both small results in memory and large results spilled to disk.
-    
+
     Args:
         max_size_bytes: Maximum size in bytes for the memory cache.
     """
@@ -387,13 +392,15 @@ class _DatasetCacheManager:
         self._lock = threading.RLock()
         self._hit_count = 0
         self._miss_count = 0
-        
+
         # Disk spilling for large items
         context = DataContext.get_current()
-        cache_location = getattr(context, 'cache_location', None)
-        max_disk_size = getattr(context, 'max_disk_cache_bytes', 10 * 1024**3)
-        self._disk_spill_threshold = getattr(context, 'memory_spill_threshold_bytes', 100 * 1024**2)
-        
+        cache_location = getattr(context, "cache_location", None)
+        max_disk_size = getattr(context, "max_disk_cache_bytes", 10 * 1024**3)
+        self._disk_spill_threshold = getattr(
+            context, "memory_spill_threshold_bytes", 100 * 1024**2
+        )
+
         self._disk_cache = _DiskSpillManager(cache_location, max_disk_size)
 
     def get(self, key: _CacheKey) -> Optional[Any]:
@@ -406,35 +413,39 @@ class _DatasetCacheManager:
                 entry.access()
                 self._hit_count += 1
                 return entry.result
-            
+
             # Try disk cache
             disk_key = str(hash(key))
             disk_result = self._disk_cache.get(disk_key)
             if disk_result is not None:
                 self._hit_count += 1
                 return disk_result
-            
+
             self._miss_count += 1
             return None
 
     def put(self, key: _CacheKey, result: Any) -> None:
         """Store result in cache with intelligent spilling."""
-        
+
         # Special handling for MaterializedDataset - cache the object itself, not raw data
-        if hasattr(result, '_plan') and hasattr(result, 'num_blocks'):
+        if hasattr(result, "_plan") and hasattr(result, "num_blocks"):
             # This is a MaterializedDataset - cache the object with ObjectRef[Block] references
             # This is memory-efficient as we're not duplicating the actual data
             size_bytes = self._estimate_materialized_dataset_size(result)
-            logger.debug(f"Caching MaterializedDataset with {result.num_blocks()} blocks, estimated size: {size_bytes:,} bytes")
+            logger.debug(
+                f"Caching MaterializedDataset with {result.num_blocks()} blocks, estimated size: {size_bytes:,} bytes"
+            )
         else:
             size_bytes = self._estimate_size(result)
-        
+
         # Large items go directly to disk (but MaterializedDataset should usually stay in memory)
-        if size_bytes > self._disk_spill_threshold and not hasattr(result, 'num_blocks'):
+        if size_bytes > self._disk_spill_threshold and not hasattr(
+            result, "num_blocks"
+        ):
             disk_key = str(hash(key))
             self._disk_cache.put(disk_key, result)
             return
-        
+
         with self._lock:
             # Check if we need to evict entries
             while (
@@ -457,7 +468,7 @@ class _DatasetCacheManager:
     ) -> None:
         """Selectively invalidate cache based on transformation type."""
         valid_operations = CACHE_VALIDITY_MATRIX.get(transformation_type, set())
-        
+
         with self._lock:
             keys_to_remove = []
             for cache_key in self._cache.keys():
@@ -469,7 +480,7 @@ class _DatasetCacheManager:
                     except ValueError:
                         # Unknown operation, invalidate conservatively
                         keys_to_remove.append(cache_key)
-            
+
             # Remove invalidated entries
             for key in keys_to_remove:
                 entry = self._cache.pop(key)
@@ -487,7 +498,7 @@ class _DatasetCacheManager:
         with self._lock:
             self._cache.clear()
             self.current_size_bytes = 0
-        
+
         self._disk_cache.clear()
 
     def get_stats(self) -> Dict[str, Any]:
@@ -519,26 +530,28 @@ class _DatasetCacheManager:
 
     def _estimate_materialized_dataset_size(self, materialized_dataset) -> int:
         """Estimate size of MaterializedDataset object (not the data itself).
-        
+
         MaterializedDataset contains ObjectRef[Block] references, not the actual data.
         We estimate the size of the object structure itself, which is small.
         """
         try:
             # MaterializedDataset object overhead
             base_size = 1024  # Base object size
-            
+
             # Size of block references and metadata (not the actual block data)
             num_blocks = materialized_dataset.num_blocks()
             ref_overhead = num_blocks * 64  # ~64 bytes per ObjectRef + metadata
-            
+
             # Logical plan overhead
             plan_overhead = 2048  # Estimated logical plan size
-            
+
             total_size = base_size + ref_overhead + plan_overhead
-            
-            logger.debug(f"MaterializedDataset size estimate: {num_blocks} blocks -> {total_size:,} bytes overhead")
+
+            logger.debug(
+                f"MaterializedDataset size estimate: {num_blocks} blocks -> {total_size:,} bytes overhead"
+            )
             return total_size
-            
+
         except Exception as e:
             logger.debug(f"Failed to estimate MaterializedDataset size: {e}")
             return 4096  # Conservative fallback
@@ -551,12 +564,17 @@ class _DatasetCacheManager:
             if len(obj) > 1000:
                 # Sample large collections
                 sample_size = min(100, len(obj) // 10)
-                sample_total = sum(self._estimate_size(obj[i]) for i in range(0, len(obj), len(obj) // sample_size))
+                sample_total = sum(
+                    self._estimate_size(obj[i])
+                    for i in range(0, len(obj), len(obj) // sample_size)
+                )
                 return sample_total * len(obj) // sample_size
             else:
                 return sum(self._estimate_size(item) for item in obj)
         elif isinstance(obj, dict):
-            return sum(self._estimate_size(k) + self._estimate_size(v) for k, v in obj.items())
+            return sum(
+                self._estimate_size(k) + self._estimate_size(v) for k, v in obj.items()
+            )
         else:
             return 1024  # 1KB fallback
 
@@ -572,7 +590,9 @@ def _get_cache_manager() -> _DatasetCacheManager:
     with _cache_lock:
         if _global_cache_manager is None:
             context = DataContext.get_current()
-            max_cache_size = getattr(context, "dataset_cache_max_size_bytes", 1024 * 1024 * 1024)
+            max_cache_size = getattr(
+                context, "dataset_cache_max_size_bytes", 1024 * 1024 * 1024
+            )
             _global_cache_manager = _DatasetCacheManager(max_cache_size)
         return _global_cache_manager
 
@@ -597,6 +617,7 @@ def cache_result(operation_name: str, include_params: List[str] = None):
             cache_params = {}
             if include_params:
                 import inspect
+
                 sig = inspect.signature(func)
                 bound_args = sig.bind(self, *args, **kwargs)
                 bound_args.apply_defaults()
@@ -626,31 +647,38 @@ def cache_result(operation_name: str, include_params: List[str] = None):
 
 def invalidate_cache_on_transform(operation_name: str):
     """Decorator to invalidate cache when transformations are applied.
-    
+
     Args:
         operation_name: Name of the transformation operation.
     """
+
     def decorator(func: Callable) -> Callable:
         @functools.wraps(func)
         def wrapper(self, *args, **kwargs):
             # Get original logical plan
             original_logical_plan = self._logical_plan
-            
+
             # Execute transformation
             result = func(self, *args, **kwargs)
-            
+
             # Apply selective invalidation if caching enabled
             context = DataContext.get_current()
-            if getattr(context, "enable_dataset_caching", True) and hasattr(result, "_logical_plan"):
+            if getattr(context, "enable_dataset_caching", True) and hasattr(
+                result, "_logical_plan"
+            ):
                 try:
                     transformation_type = get_transformation_type(operation_name)
                     cache_manager = _get_cache_manager()
-                    cache_manager.invalidate_for_transformation(original_logical_plan, transformation_type)
+                    cache_manager.invalidate_for_transformation(
+                        original_logical_plan, transformation_type
+                    )
                 except Exception as e:
                     logger.debug(f"Cache invalidation failed for {operation_name}: {e}")
-            
+
             return result
+
         return wrapper
+
     return decorator
 
 
